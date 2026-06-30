@@ -1,0 +1,62 @@
+version: 2
+
+project_name: gitswitch
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: gitswitch
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - Merge pull request
+      - Merge branch
+
+# ── AUR (Arch Linux) ─────────────────────────────────────────────────────────
+# Requires: AUR_KEY secret (SSH private key registered on aur.archlinux.org)
+# aurs:
+#   - name: gitswitch-bin
+#     homepage: https://github.com/ESRAILHAQUE/gitswitch
+#     description: Manage multiple GitHub SSH profiles from one machine
+#     maintainers:
+#       - "Esrail Haque <esrailbblhs@gmail.com>"
+#     license: MIT
+
+# ── Linux packages (.deb / .rpm / .apk) ──────────────────────────────────────
+# nfpms:
+#   - id: packages
+#     package_name: gitswitch
+#     homepage: https://github.com/ESRAILHAQUE/gitswitch
+#     description: Manage multiple GitHub SSH profiles from one machine
+#     maintainer: Esrail Haque <esrailbblhs@gmail.com>
+#     license: MIT

@@ -1,0 +1,214 @@
+# Install gitswitch from GitHub releases.
+#
+# Usage:
+#   irm https://raw.githubusercontent.com/ESRAILHAQUE/gitswitch/master/scripts/install.ps1 | iex
+#   irm ... | iex; install-gitswitch -Version v1.0.0
+#   irm ... | iex; install-gitswitch -InstallDir "$env:LOCALAPPDATA\Programs\gitswitch"
+
+[CmdletBinding()]
+param(
+    [string]$InstallDir = "",
+    [string]$Version = "latest",
+    [switch]$SkipPathHint,
+    [switch]$SkipDepCheck
+)
+
+$ErrorActionPreference = "Stop"
+
+$Repo = "ESRAILHAQUE/gitswitch"
+$Binary = "gitswitch"
+
+function Write-Info([string]$Message) {
+    Write-Host "[gitswitch] $Message" -ForegroundColor Green
+}
+
+function Write-Warn([string]$Message) {
+    Write-Host "[gitswitch] $Message" -ForegroundColor Yellow
+}
+
+function Write-Err([string]$Message) {
+    Write-Host "[gitswitch] error: $Message" -ForegroundColor Red
+    exit 1
+}
+
+function Get-Arch {
+    if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+        return "arm64"
+    }
+    return "amd64"
+}
+
+function Get-DefaultInstallDir {
+    if ($InstallDir) { return $InstallDir }
+    if ($env:INSTALL_DIR) { return $env:INSTALL_DIR }
+    return Join-Path $env:LOCALAPPDATA "Programs\gitswitch"
+}
+
+function Get-GitMissingMessage {
+@'
+gitswitch: git is not installed or not on your PATH.
+
+  gitswitch wraps git — install Git first, then restart your terminal.
+
+  Windows:
+    winget install Git.Git
+    — or — https://git-scm.com/download/win
+    Choose "Git from the command line and also from 3rd-party software" during setup.
+'@
+}
+
+function Get-SSHKeygenMissingMessage {
+@'
+gitswitch: ssh-keygen is not installed or not on your PATH.
+
+  gitswitch gen creates SSH keys using ssh-keygen.
+
+  Windows:
+    Settings → Apps → Optional features → Add "OpenSSH Client"
+    — or — install Git for Windows (includes ssh-keygen)
+    — or — winget install Microsoft.OpenSSH.Beta
+    Then restart your terminal.
+'@
+}
+
+function Test-Dependencies {
+    $missing = @()
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        $missing += "git"
+    }
+    if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
+        $missing += "ssh-keygen"
+    }
+    if ($missing.Count -eq 0) { return }
+
+    Write-Warn "Some prerequisites are missing (gitswitch needs them for most commands):"
+    if ($missing -contains "git") {
+        Write-Host ""
+        Write-Host (Get-GitMissingMessage)
+    }
+    if ($missing -contains "ssh-keygen") {
+        Write-Host ""
+        Write-Host (Get-SSHKeygenMissingMessage)
+    }
+    Write-Host ""
+}
+
+function Resolve-ReleaseTag {
+    $ver = $Version
+    if ($env:MGIT_VERSION) { $ver = $env:MGIT_VERSION }
+    if ($ver -ne "latest") {
+        if ($ver -notmatch '^v') { return "v$ver" }
+        return $ver
+    }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+    return $release.tag_name
+}
+
+function Verify-Checksum([string]$ArchivePath, [string]$ChecksumsPath) {
+    $archiveName = Split-Path $ArchivePath -Leaf
+    $expected = (Get-Content $ChecksumsPath | Where-Object { $_ -match [regex]::Escape($archiveName) } | ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
+    if (-not $expected) {
+        Write-Err "checksum not found for $archiveName"
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $ArchivePath).Hash.ToLower()
+    if ($actual -ne $expected.ToLower()) {
+        Write-Err "checksum mismatch for $archiveName"
+    }
+}
+
+function Show-PathHint([string]$Dir) {
+    if ($SkipPathHint) { return }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $parts = $userPath -split ';' | Where-Object { $_ }
+    if ($parts -contains $Dir) { return }
+
+    Write-Warn "$Dir is not on your PATH"
+    Write-Host ""
+    Write-Host "Add it to your user PATH:"
+    Write-Host ""
+    Write-Host "  [Environment]::SetEnvironmentVariable(""Path"", ""$Dir;"" + [Environment]::GetEnvironmentVariable(""Path"", ""User""), ""User"")"
+    Write-Host ""
+    Write-Host "Then open a new terminal."
+    Write-Host ""
+}
+
+$Arch = Get-Arch
+$InstallDir = Get-DefaultInstallDir
+$Tag = Resolve-ReleaseTag
+$Archive = "${Binary}_windows_${Arch}.zip"
+$Url = "https://github.com/$Repo/releases/download/$Tag/$Archive"
+
+Write-Info "Installing gitswitch $Tag (windows/$Arch) to $InstallDir..."
+
+if (-not $SkipDepCheck) {
+    Test-Dependencies
+}
+
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gitswitch-install-" + [guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+try {
+    $ArchivePath = Join-Path $TempDir $Archive
+    $ChecksumsPath = Join-Path $TempDir "checksums.txt"
+
+    Write-Info "Downloading $Url"
+    Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -UseBasicParsing
+
+    $ChecksumUrl = "https://github.com/$Repo/releases/download/$Tag/checksums.txt"
+    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumsPath -UseBasicParsing
+    Verify-Checksum $ArchivePath $ChecksumsPath
+    Write-Info "Checksum verified"
+
+    Expand-Archive -Path $ArchivePath -DestinationPath $TempDir -Force
+    $ExePath = Join-Path $TempDir "$Binary.exe"
+    if (-not (Test-Path $ExePath)) {
+        Write-Err "expected $Binary.exe in archive"
+    }
+
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Copy-Item -Path $ExePath -Destination (Join-Path $InstallDir "$Binary.exe") -Force
+}
+finally {
+    Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+}
+
+$Installed = Join-Path $InstallDir "$Binary.exe"
+Write-Info "Installed: $Installed"
+& $Installed --version
+
+Show-PathHint $InstallDir
+
+Write-Host ""
+Write-Host "[gitswitch] Let's set up your GitHub profiles!" -ForegroundColor Green
+$num_accounts_str = Read-Host "How many GitHub accounts do you want to set up right now? (Enter 0 to skip) [0]"
+$num_accounts = 0
+if ([int]::TryParse($num_accounts_str, [ref]$num_accounts)) {
+    if ($num_accounts -gt 0) {
+        for ($i = 1; $i -le $num_accounts; $i++) {
+            Write-Host "`n--- Setting up Account $i of $num_accounts ---" -ForegroundColor Cyan
+            & $Installed gen
+        }
+        Write-Host "`n[gitswitch] Setup complete! Make sure you have copied the SSH keys and added them to your GitHub settings." -ForegroundColor Green
+    } else {
+        Write-Info "Skipping setup. Run 'gitswitch gen' anytime to create a profile."
+    }
+} else {
+    Write-Info "Skipping setup. Run 'gitswitch gen' anytime to create a profile."
+}
+Write-Host "`n--- Configuring Auto-Alias ---" -ForegroundColor Cyan
+$ProfilePath = $PROFILE
+$AliasCmd = "Set-Alias -Name git -Value gitswitch"
+
+if (Test-Path $ProfilePath) {
+    $content = Get-Content $ProfilePath
+    if ($content -notcontains $AliasCmd) {
+        Add-Content -Path $ProfilePath -Value "`n$AliasCmd"
+    }
+} else {
+    New-Item -ItemType File -Path $ProfilePath -Force | Out-Null
+    Add-Content -Path $ProfilePath -Value $AliasCmd
+}
+
+Write-Host "[gitswitch] Successfully aliased 'git' to 'gitswitch'." -ForegroundColor Green
+Write-Host "Please restart your PowerShell to apply changes.`n"

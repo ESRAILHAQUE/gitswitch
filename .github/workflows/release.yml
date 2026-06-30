@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve goreleaser args
+        id: args
+        env:
+          AUR_KEY_VAL: ${{ secrets.AUR_KEY }}
+        run: |
+          ARGS="release --clean"
+          [ -z "$AUR_KEY_VAL" ] && ARGS="$ARGS --skip=aur"
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: ${{ steps.args.outputs.args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+
